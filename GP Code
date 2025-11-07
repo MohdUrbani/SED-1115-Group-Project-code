@@ -1,0 +1,86 @@
+from machine import Pin, PWM, ADC
+from time import sleep
+
+#----------------DEFINING POTENTIOMETERS---------------
+adcright = ADC(26)
+adcleft = ADC(27)
+#------------------------------------------------------
+
+
+#----------------READING POTENTIOMETERS---------------
+def read_right_pot():
+    """Reads raw analog value (0–65535)"""
+    return adcright.read_u16()
+
+def read_left_pot():
+    """Reads raw analog value (0–65535)"""
+    return adcleft.read_u16()
+#------------------------------------------------------
+
+
+#----------------TRANSLATE FUNCTION--------------------
+def translate(value):
+    """Convert 0–65535 pot reading to servo duty cycle"""
+    angle = int((value / 65535) * 180)
+    if angle < 0:
+        angle = 0
+    elif angle > 180:
+        angle = 180
+    pulse_width = 500 + (2000 * angle / 180)
+    period_us = 20000
+    duty_u16 = int((pulse_width / period_us) * 65535)
+    return duty_u16
+#------------------------------------------------------
+
+
+#----------------SETUP SERVOS 1 AND 2--------------------------
+servo1 = PWM(Pin(0))
+servo2 = PWM(Pin(1))
+servo1.freq(50)
+servo2.freq(50)
+#------------------------------------------------------
+
+#----------------BUTTON AND SERVO 3 SETUP--------------
+button = Pin(10, Pin.IN, Pin.PULL_UP)  # SW1 is active-low (pressed = 0)
+servo3 = PWM(Pin(2))
+servo3.freq(50)
+
+servo3_state = 0  # 0° start
+last_button = 1   # previous reading
+#------------------------------------------------------
+
+#----------------MAIN LOOP-----------------------------
+while True:
+    # read both potentiometers
+    right_val = read_right_pot()
+    left_val = read_left_pot()
+
+    # move both servos based on their own potentiometer
+    servo1.duty_u16(translate(right_val))
+    servo2.duty_u16(translate(left_val))
+
+    # debug output
+    print("Right pot:", right_val, "→ Servo1 moving")
+    print("Left pot :", left_val, "→ Servo2 moving")
+    print("---------------------------------------------")
+
+    # read button and toggle servo3
+    current_button = button.value()
+
+    if last_button == 1 and current_button == 0:   # detect button press
+        if servo3_state == 0:
+            servo3.duty_u16(translate(int((45/180)*65535)))  # move to 45°
+            servo3_state = 1
+            print("Servo3 → 45° (pen down)")
+        else:
+            servo3.duty_u16(translate(0))  # move back to 0°
+            servo3_state = 0
+            print("Servo3 → 0° (pen up)")
+
+        sleep(0.2)  # debounce delay
+
+    last_button = current_button
+
+    sleep(0.1)
+#------------------------------------------------------
+
