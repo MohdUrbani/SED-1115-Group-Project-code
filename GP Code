@@ -1,86 +1,124 @@
 from machine import Pin, PWM, ADC
 from time import sleep
+from math import atan2, acos, sqrt, degrees
 
-#----------------DEFINING POTENTIOMETERS---------------
-adcright = ADC(26)
-adcleft = ADC(27)
-#------------------------------------------------------
-
-
-#----------------READING POTENTIOMETERS---------------
-def read_right_pot():
-    """Reads raw analog value (0–65535)"""
-    return adcright.read_u16()
-
-def read_left_pot():
-    """Reads raw analog value (0–65535)"""
-    return adcleft.read_u16()
-#------------------------------------------------------
+#----------------DEFINE POTENTIOMETERS---------------
+x_potentiometer = ADC(26)  # controls X axis
+y_potentiometer = ADC(27)  # controls Y axis
+#----------------------------------------------------
 
 
-#----------------TRANSLATE FUNCTION--------------------
-def translate(value):
-    """Convert 0–65535 pot reading to servo duty cycle"""
-    angle = int((value / 65535) * 180)
-    if angle < 0:
-        angle = 0
-    elif angle > 180:
-        angle = 180
-    pulse_width = 500 + (2000 * angle / 180)
+#----------------FUNCTION TO READ POTS---------------
+def read_x_pot():
+    return x_potentiometer.read_u16()
+
+def read_y_pot():
+    return y_potentiometer.read_u16()
+#----------------------------------------------------
+
+
+#----------------TRANSLATE ANGLE FUNCTION-------------
+def angle_to_duty(angle_degrees):
+    """Convert 0–180° angle to servo duty value"""
+    if angle_degrees < 0:
+        angle_degrees = 0
+    elif angle_degrees > 180:
+        angle_degrees = 180
+    pulse_width = 500 + (2000 * angle_degrees / 180)
     period_us = 20000
-    duty_u16 = int((pulse_width / period_us) * 65535)
-    return duty_u16
-#------------------------------------------------------
+    duty_value = int((pulse_width / period_us) * 65535)
+    return duty_value
+#----------------------------------------------------
 
 
-#----------------SETUP SERVOS 1 AND 2--------------------------
-servo1 = PWM(Pin(0))
-servo2 = PWM(Pin(1))
-servo1.freq(50)
-servo2.freq(50)
-#------------------------------------------------------
+#----------------SETUP SERVOS-------------------------
+shoulder_servo = PWM(Pin(0))   # shoulder joint servo
+elbow_servo = PWM(Pin(1))      # elbow joint servo
+pen_servo = PWM(Pin(2))        # pen up/down servo
 
-#----------------BUTTON AND SERVO 3 SETUP--------------
-button = Pin(10, Pin.IN, Pin.PULL_UP)  # SW1 is active-low (pressed = 0)
-servo3 = PWM(Pin(2))
-servo3.freq(50)
+shoulder_servo.freq(50)
+elbow_servo.freq(50)
+pen_servo.freq(50)
+#----------------------------------------------------
 
-servo3_state = 0  # 0° start
-last_button = 1   # previous reading
-#------------------------------------------------------
 
-#----------------MAIN LOOP-----------------------------
+#----------------SETUP BUTTON-------------------------
+pen_button = Pin(10, Pin.IN, Pin.PULL_UP)  # SW1
+pen_state = 0      # 0 = pen up, 1 = pen down
+previous_button = 1
+#----------------------------------------------------
+
+
+#----------------ARM LENGTH SETTINGS-----------------
+upper_arm_length = 9.0 #cm
+forearm_length = 9.0 #cm
+#----------------------------------------------------
+
+#----------------MAIN LOOP----------------------------
 while True:
-    # read both potentiometers
-    right_val = read_right_pot()
-    left_val = read_left_pot()
+    # Read potentiometer values (0–65535)
+    raw_x_value = read_x_pot()
+    raw_y_value = read_y_pot()
 
-    # move both servos based on their own potentiometer
-    servo1.duty_u16(translate(right_val))
-    servo2.duty_u16(translate(left_val))
+    # --- Map potentiometers to paper coordinates (in cm) ---
+    PAPER_WIDTH_CM  = 21.59    #21.59 cm = 8.5 inches
+    PAPER_HEIGHT_CM = 27.94    #27.94 cm = 11 inches
+    EDGE_MARGIN_CM  = 1.0      # keep pen away from edges
 
-    # debug output
-    print("Right pot:", right_val, "→ Servo1 moving")
-    print("Left pot :", left_val, "→ Servo2 moving")
-    print("---------------------------------------------")
+    # Define safe drawing area
+    DRAW_MIN_X = EDGE_MARGIN_CM
+    DRAW_MAX_X = PAPER_WIDTH_CM  - EDGE_MARGIN_CM
+    DRAW_MIN_Y = EDGE_MARGIN_CM
+    DRAW_MAX_Y = PAPER_HEIGHT_CM - EDGE_MARGIN_CM
 
-    # read button and toggle servo3
-    current_button = button.value()
+    # Map 0–65535 pot readings to that area
+    x_position = DRAW_MIN_X + (raw_x_value / 65535) * (DRAW_MAX_X - DRAW_MIN_X)
+    y_position = DRAW_MIN_Y + (raw_y_value / 65535) * (DRAW_MAX_Y - DRAW_MIN_Y)
 
-    if last_button == 1 and current_button == 0:   # detect button press
-        if servo3_state == 0:
-            servo3.duty_u16(translate(int((45/180)*65535)))  # move to 45°
-            servo3_state = 1
-            print("Servo3 → 45° (pen down)")
+
+    # Calculate the distance from origin to the target point
+    arm_reach = sqrt(x_position**2 + y_position**2)
+    arm_reach = max(min(arm_reach, upper_arm_length + forearm_length - 0.001),
+                    abs(upper_arm_length - forearm_length) + 0.001)
+
+    # Inverse kinematics to find joint angles
+    try:
+        elbow_radians = acos((upper_arm_length**2 + forearm_length**2 - arm_reach**2) / 
+                             (2 * upper_arm_length * forearm_length))
+        shoulder_radians = atan2(y_position, x_position) - acos((upper_arm_length**2 + arm_reach**2 - forearm_length**2) /
+                                                                (2 * upper_arm_length * arm_reach))
+    except ValueError:
+        continue  # skip invalid positions
+
+    # Convert radians to degrees
+    shoulder_angle = degrees(shoulder_radians)
+    elbow_angle = degrees(elbow_radians)
+
+    # Adjust to servo range (add offset to center the motion)
+    shoulder_angle = max(0, min(180, shoulder_angle + 90))
+    elbow_angle = max(0, min(180, 180 - elbow_angle))
+
+    # Move both servos to calculated angles
+    shoulder_servo.duty_u16(angle_to_duty(shoulder_angle))
+    elbow_servo.duty_u16(angle_to_duty(elbow_angle))
+
+    # Print values for debugging
+    print(f"X={x_position:.2f}, Y={y_position:.2f}, Shoulder={shoulder_angle:.1f}°, Elbow={elbow_angle:.1f}°")
+
+    # ----- Handle pen button -----
+    current_button = pen_button.value()
+    if previous_button == 1 and current_button == 0:
+        if pen_state == 0:
+            pen_servo.duty_u16(angle_to_duty(45))  # pen down
+            pen_state = 1
+            print("Pen: DOWN")
         else:
-            servo3.duty_u16(translate(0))  # move back to 0°
-            servo3_state = 0
-            print("Servo3 → 0° (pen up)")
+            pen_servo.duty_u16(angle_to_duty(0))   # pen up
+            pen_state = 0
+            print("Pen: UP")
+        sleep(0.2)  # debounce
+    previous_button = current_button
 
-        sleep(0.2)  # debounce delay
-
-    last_button = current_button
-
-    sleep(0.1)
-#------------------------------------------------------
+    sleep(0.05)
+#----------------------------------------------------
 
