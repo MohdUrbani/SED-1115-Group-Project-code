@@ -50,8 +50,8 @@ previous_button = 1
 
 
 #----------------ARM LENGTH SETTINGS-----------------
-upper_arm_length = 9.0 #cm
-forearm_length = 9.0 #cm
+upper_arm_length = 14.0 #cm
+forearm_length = 14.0 #cm
 #----------------------------------------------------
 
 #----------------MAIN LOOP----------------------------
