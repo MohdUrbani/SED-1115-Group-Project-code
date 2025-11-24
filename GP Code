@@ -1,6 +1,6 @@
 from machine import Pin, PWM, ADC
 from time import sleep
-from math import acos, asin, atan2, sqrt, degrees
+from math import acos, asin, atan2, sqrt, degrees, sin
 
 #----------------DEFINE POTENTIOMETERS---------------
 x_potentiometer = ADC(26)
@@ -34,14 +34,14 @@ pen_servo.freq(50)
 #----------------------------------------------------
 
 #----------------SETUP BUTTON-------------------------
-pen_button = Pin(10, Pin.IN, Pin.PULL_UP)
+pen_button = Pin(10, Pin.IN, Pin.PULL_DOWN)
 pen_state = 0
 previous_button = 1
 #----------------------------------------------------
 
 #----------------ARM LENGTH SETTINGS-----------------
-L_a = 14.0   # upper arm (A->B)
-L_b = 14.0   # forearm (B->C)
+L_a = 15.0   # upper arm (A->B)
+L_b = 15.5   # forearm (B->C)
 #----------------------------------------------------
 
 #----------------BASE OFFSET--------------------------
@@ -55,8 +55,8 @@ while True:
     raw_y = read_y_pot()
 
     # Convert pots to 8.5x11 inch paper workspace
-    PAPER_WIDTH_CM  = 21.59
-    PAPER_HEIGHT_CM = 27.94
+    PAPER_WIDTH_CM  = 30
+    PAPER_HEIGHT_CM = 30
     EDGE = 1.0
 
     DRAW_MIN_X = EDGE
@@ -106,14 +106,17 @@ while True:
 
     # Pen button toggle
     current_button = pen_button.value()
-    if previous_button == 1 and current_button == 0:
+    if previous_button == 0 and current_button == 1:  # pressed
         if pen_state == 0:
-            pen_servo.duty_u16(angle_to_duty(45))
+            pen_servo.duty_u16(angle_to_duty(0))
             pen_state = 1
         else:
-            pen_servo.duty_u16(angle_to_duty(0))
+            pen_servo.duty_u16(angle_to_duty(25))
             pen_state = 0
-        sleep(0.2)
+
+        sleep(0.2)  # debounce
+
     previous_button = current_button
+
 
     sleep(0.05)
