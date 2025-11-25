@@ -1,122 +1,158 @@
 from machine import Pin, PWM, ADC
 from time import sleep
-from math import acos, asin, atan2, sqrt, degrees, sin
+from math import sqrt, atan2, acos, sin, cos, degrees
 
-#----------------DEFINE POTENTIOMETERS---------------
+# ============================================================
+#  ARM DIMENSIONS (distance between joints in cm)
+# ============================================================
+UPPER_ARM_LENGTH = 15.0
+FOREARM_LENGTH   = 15.5
+
+# ============================================================
+#  PAPER WORKSPACE (Letter Size)
+# ============================================================
+PAPER_WIDTH_CM  = 21.59
+PAPER_HEIGHT_CM = 27.94
+EDGE_MARGIN_CM  = 2.0
+
+WORKSPACE_MIN_X = EDGE_MARGIN_CM
+WORKSPACE_MAX_X = PAPER_WIDTH_CM  - EDGE_MARGIN_CM
+WORKSPACE_MIN_Y = EDGE_MARGIN_CM
+WORKSPACE_MAX_Y = PAPER_HEIGHT_CM - EDGE_MARGIN_CM
+
+SHOULDER_POS_X = 0.0
+SHOULDER_POS_Y = 0.0
+
+# ============================================================
+#  SERVO CALIBRATION
+# ============================================================
+SHOULDER_SERVO_ZERO   = 90
+SHOULDER_SERVO_DIR    = 1
+
+ELBOW_SERVO_ZERO      = 180
+ELBOW_SERVO_DIR       = -1
+
+PEN_UP_ANGLE   = 25
+PEN_DOWN_ANGLE = 0
+
+# ============================================================
+#  HARDWARE INPUTS
+# ============================================================
 x_potentiometer = ADC(26)
 y_potentiometer = ADC(27)
-#----------------------------------------------------
 
-def read_x_pot():
-    return x_potentiometer.read_u16()
+def read_pot_as_fraction(adc):
+    return adc.read_u16() / 65535.0
 
-def read_y_pot():
-    return y_potentiometer.read_u16()
+# ============================================================
+#  SERVOS
+# ============================================================
+shoulder_servo = PWM(Pin(0)); shoulder_servo.freq(50)
+elbow_servo    = PWM(Pin(1)); elbow_servo.freq(50)
+pen_servo      = PWM(Pin(2)); pen_servo.freq(50)
 
-#----------------CONVERT ANGLE TO SERVO DUTY---------
-def angle_to_duty(angle_deg):
-    if angle_deg < 0:
-        angle_deg = 0
-    elif angle_deg > 180:
-        angle_deg = 180
-    pulse_width = 500 + (2000 * angle_deg / 180)
-    return int((pulse_width / 20000) * 65535)
-#----------------------------------------------------
-
-#----------------SETUP SERVOS-------------------------
-shoulder_servo = PWM(Pin(0))
-elbow_servo = PWM(Pin(1))
-pen_servo = PWM(Pin(2))
-
-shoulder_servo.freq(50)
-elbow_servo.freq(50)
-pen_servo.freq(50)
-#----------------------------------------------------
-
-#----------------SETUP BUTTON-------------------------
 pen_button = Pin(10, Pin.IN, Pin.PULL_DOWN)
-pen_state = 0
-previous_button = 1
-#----------------------------------------------------
+pen_is_down = 0
+previous_button_state = 0
 
-#----------------ARM LENGTH SETTINGS-----------------
-L_a = 15.0   # upper arm (A->B)
-L_b = 15.5   # forearm (B->C)
-#----------------------------------------------------
+# ============================================================
+#  FILTERS
+# ============================================================
+XY_FILTER_AMOUNT = 0.12
+smoothed_x = 0.0
+smoothed_y = 0.0
 
-#----------------BASE OFFSET--------------------------
-A_base_x = 0
-A_base_y = 0
-#----------------------------------------------------
+SERVO_SMOOTHING = 0.25
+current_shoulder_servo_angle = 90.0
+current_elbow_servo_angle    = 90.0
 
-#----------------MAIN LOOP----------------------------
+# ============================================================
+#  HELPERS
+# ============================================================
+def clamp(v, lo, hi):
+    if v < lo: return lo
+    if v > hi: return hi
+    return v
+
+def convert_angle_to_pwm(angle_deg):
+    angle_deg = clamp(angle_deg, 0, 180)
+    pulse = 500 + (2000 * angle_deg / 180.0)
+    return int((pulse / 20000.0) * 65535)
+
+# ============================================================
+#  INVERSE KINEMATICS
+# ============================================================
+def compute_joint_angles_for_position(x, y):
+    dx = x - SHOULDER_POS_X
+    dy = y - SHOULDER_POS_Y
+
+    d = sqrt(dx*dx + dy*dy)
+    d = clamp(d, abs(UPPER_ARM_LENGTH - FOREARM_LENGTH) + 0.01,
+                 UPPER_ARM_LENGTH + FOREARM_LENGTH - 0.01)
+
+    cos_elbow = (dx*dx + dy*dy - UPPER_ARM_LENGTH**2 - FOREARM_LENGTH**2) / (2 * UPPER_ARM_LENGTH * FOREARM_LENGTH)
+    cos_elbow = clamp(cos_elbow, -1, 1)
+    elbow_internal_rad = acos(cos_elbow)
+
+    k1 = UPPER_ARM_LENGTH + FOREARM_LENGTH * cos(elbow_internal_rad)
+    k2 = FOREARM_LENGTH * sin(elbow_internal_rad)
+
+    shoulder_rad = atan2(dy, dx) - atan2(k2, k1)
+
+    return degrees(shoulder_rad), degrees(elbow_internal_rad)
+
+def convert_joint_angles_to_servo(shoulder_deg, elbow_deg):
+    shoulder_servo_angle = SHOULDER_SERVO_ZERO + SHOULDER_SERVO_DIR * shoulder_deg
+    elbow_servo_angle    = ELBOW_SERVO_ZERO    + ELBOW_SERVO_DIR    * elbow_deg
+    return shoulder_servo_angle, elbow_servo_angle
+
+# ============================================================
+#  MAIN LOOP
+# ============================================================
+print("Brachiograph Running With 90° Clockwise Paper Rotation...\n")
+
 while True:
-    raw_x = read_x_pot()
-    raw_y = read_y_pot()
+    raw_x = read_pot_as_fraction(x_potentiometer)
+    raw_y = read_pot_as_fraction(y_potentiometer)
 
-    # Convert pots to 8.5x11 inch paper workspace
-    PAPER_WIDTH_CM  = 30
-    PAPER_HEIGHT_CM = 30
-    EDGE = 1.0
+    smoothed_x = smoothed_x * (1 - XY_FILTER_AMOUNT) + raw_x * XY_FILTER_AMOUNT
+    smoothed_y = smoothed_y * (1 - XY_FILTER_AMOUNT) + raw_y * XY_FILTER_AMOUNT
 
-    DRAW_MIN_X = EDGE
-    DRAW_MAX_X = PAPER_WIDTH_CM  - EDGE
-    DRAW_MIN_Y = EDGE
-    DRAW_MAX_Y = PAPER_HEIGHT_CM - EDGE
+    # *** FLIPPED Y AXIS FOR 90 DEG ROTATION ***
+    target_x = WORKSPACE_MIN_X + smoothed_x * (WORKSPACE_MAX_X - WORKSPACE_MIN_X)
+    target_y = WORKSPACE_MIN_Y + (1.0 - smoothed_y) * (WORKSPACE_MAX_Y - WORKSPACE_MIN_Y)
 
-    Cx = DRAW_MIN_X + (raw_x / 65535) * (DRAW_MAX_X - DRAW_MIN_X)
-    Cy = DRAW_MIN_Y + (raw_y / 65535) * (DRAW_MAX_Y - DRAW_MIN_Y)
+    shoulder_deg, elbow_deg = compute_joint_angles_for_position(target_x, target_y)
+    target_shoulder_servo_angle, target_elbow_servo_angle = convert_joint_angles_to_servo(shoulder_deg, elbow_deg)
 
-    # Step 1 (Equation 1)
-    AC = sqrt((A_base_x - Cx)**2 + (A_base_y - Cy)**2)
+    current_shoulder_servo_angle = (
+        current_shoulder_servo_angle * (1 - SERVO_SMOOTHING)
+        + target_shoulder_servo_angle * SERVO_SMOOTHING
+    )
 
-    # Step 2 (Equation 2) – base-to-target vertical distance
-    A_baseC = sqrt((A_base_x - Cx)**2 + (A_base_y - Cy)**2)
+    current_elbow_servo_angle = (
+        current_elbow_servo_angle * (1 - SERVO_SMOOTHING)
+        + target_elbow_servo_angle * SERVO_SMOOTHING
+    )
 
-    # Step 3 (Equation 3) – ∠BAC
-    angle_BAC = acos((L_a**2 + AC**2 - L_b**2) / (2 * L_a * AC))
+    shoulder_servo.duty_u16(convert_angle_to_pwm(current_shoulder_servo_angle))
+    elbow_servo.duty_u16(convert_angle_to_pwm(current_elbow_servo_angle))
 
-    # Step 4 (Equation 4) – ∠ACB
-    angle_ACB = asin((L_a * sin(angle_BAC)) / L_b)
-
-    # Step 5 (Equation 5) – ∠YAC
-    angle_YAC = acos((Cy**2 + AC**2 - A_baseC**2) / (2 * Cy * AC))
-
-    # Step 6 (Equation 6) – α = ∠BAC + ∠YAC
-    alpha = angle_BAC + angle_YAC
-
-    # Step 7 (Equation 7) – β = ∠BAC + ∠ACB
-    beta = angle_BAC + angle_ACB
-
-    # Convert radians → degrees
-    alpha_deg = degrees(alpha)
-    beta_deg  = degrees(beta)
-
-    # Apply professor's servo offset equations:
-    # (Equation 8) servoA = α - 75°
-    # (Equation 9) servoB = 150° - β
-    shoulder_angle = alpha_deg - 75
-    elbow_angle    = 150 - beta_deg
-
-    # Send to servos
-    shoulder_servo.duty_u16(angle_to_duty(shoulder_angle))
-    elbow_servo.duty_u16(angle_to_duty(elbow_angle))
-
-    print(f"Target=({Cx:.2f},{Cy:.2f}) AC={AC:.2f} α={alpha_deg:.1f} β={beta_deg:.1f}")
-
-    # Pen button toggle
-    current_button = pen_button.value()
-    if previous_button == 0 and current_button == 1:  # pressed
-        if pen_state == 0:
-            pen_servo.duty_u16(angle_to_duty(0))
-            pen_state = 1
+    btn = pen_button.value()
+    if previous_button_state == 0 and btn == 1:
+        if pen_is_down == 0:
+            pen_servo.duty_u16(convert_angle_to_pwm(PEN_DOWN_ANGLE))
+            pen_is_down = 1
+            print("Pen DOWN")
         else:
-            pen_servo.duty_u16(angle_to_duty(25))
-            pen_state = 0
+            pen_servo.duty_u16(convert_angle_to_pwm(PEN_UP_ANGLE))
+            pen_is_down = 0
+            print("Pen UP")
+        sleep(0.2)
+    previous_button_state = btn
 
-        sleep(0.2)  # debounce
+    print("TargetXY=({:.1f},{:.1f})  Shoulder={:.1f}  Elbow={:.1f}".format(
+        target_x, target_y, shoulder_deg, elbow_deg
+    ))
 
-    previous_button = current_button
-
-
-    sleep(0.05)
+    sleep(0.02)
