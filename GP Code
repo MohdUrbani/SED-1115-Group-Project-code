@@ -82,29 +82,59 @@ def convert_angle_to_pwm(angle_deg):
 # ============================================================
 #  INVERSE KINEMATICS
 # ============================================================
+
+# -----------
+  INVERSE KINEMATICS 
+# -----------
 def compute_joint_angles_for_position(x, y):
-    dx = x - SHOULDER_POS_X
-    dy = y - SHOULDER_POS_Y
+    # Position of target point C relative to shoulder at (0,0)
+    Cx = x
+    Cy = y
 
-    d = sqrt(dx*dx + dy*dy)
-    d = clamp(d, abs(UPPER_ARM_LENGTH - FOREARM_LENGTH) + 0.01,
-                 UPPER_ARM_LENGTH + FOREARM_LENGTH - 0.01)
+    # Distance AC (from shoulder to target)
+    AC = sqrt(Cx**2 + Cy**2)
+    AC = clamp(AC, 0.01, UPPER_ARM_LENGTH + FOREARM_LENGTH - 0.01)
 
-    cos_elbow = (dx*dx + dy*dy - UPPER_ARM_LENGTH**2 - FOREARM_LENGTH**2) / (2 * UPPER_ARM_LENGTH * FOREARM_LENGTH)
-    cos_elbow = clamp(cos_elbow, -1, 1)
-    elbow_internal_rad = acos(cos_elbow)
+    # ---- Angle ∠BAC ----
+    # Law of Cosines for shoulder → elbow → pen triangle
+    angle_BAC = acos(
+        (UPPER_ARM_LENGTH**2 + AC**2 - FOREARM_LENGTH**2) /
+        (2 * UPPER_ARM_LENGTH * AC)
+    )
 
-    k1 = UPPER_ARM_LENGTH + FOREARM_LENGTH * cos(elbow_internal_rad)
-    k2 = FOREARM_LENGTH * sin(elbow_internal_rad)
+    # ---- Angle ∠ACB ----
+    angle_ACB = acos(
+        (UPPER_ARM_LENGTH**2 + FOREARM_LENGTH**2 - AC**2) /
+        (2 * UPPER_ARM_LENGTH * FOREARM_LENGTH)
+    )
 
-    shoulder_rad = atan2(dy, dx) - atan2(k2, k1)
+    # ---- Angle ∠YAC (global pointing angle) ----
+    angle_YAC = atan2(Cy, Cx)
 
-    return degrees(shoulder_rad), degrees(elbow_internal_rad)
+    # ---- Combine to get α and β ----
+    alpha = angle_BAC + angle_YAC       # Shoulder internal angle
+    beta  = angle_ACB                   # Elbow internal angle
 
-def convert_joint_angles_to_servo(shoulder_deg, elbow_deg):
-    shoulder_servo_angle = SHOULDER_SERVO_ZERO + SHOULDER_SERVO_DIR * shoulder_deg
-    elbow_servo_angle    = ELBOW_SERVO_ZERO    + ELBOW_SERVO_DIR    * elbow_deg
+    # Convert to degrees
+    alpha_deg = degrees(alpha)
+    beta_deg  = degrees(beta)
+
+    return alpha_deg, beta_deg
+
+
+# --------------
+  CONVERT JOINT ANGLES TO SERVO ANGLES (CLASS JIGS OFFSETS)
+# --------------
+def convert_joint_angles_to_servo(alpha_deg, beta_deg):
+    # Apply exact offsets from professor's equations:
+    # servoA = α - 75°
+    # servoB = 150° - β
+
+    shoulder_servo_angle = alpha_deg - 75
+    elbow_servo_angle    = 150 - beta_deg
+
     return shoulder_servo_angle, elbow_servo_angle
+
 
 # ============================================================
 #  MAIN LOOP
