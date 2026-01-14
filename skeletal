@@ -1,0 +1,364 @@
+from machine import Pin, PWM, ADC
+from time import sleep
+from math import atan2, acos, sqrt, degrees
+
+# --------------------------------------------------
+# Global hardware and configuration constants
+# (Values copied from our current working prototype)
+# --------------------------------------------------
+
+# Potentiometers (ADC channels)
+X_POT_PIN = 26
+Y_POT_PIN = 27
+
+# Servo pins
+SHOULDER_SERVO_PIN = 0
+ELBOW_SERVO_PIN = 1
+PEN_SERVO_PIN = 2
+
+# Pen button
+PEN_BUTTON_PIN = 10
+
+# Arm geometry (cm)
+UPPER_ARM_LENGTH = 14.0
+FOREARM_LENGTH = 14.0
+
+# Paper dimensions (cm)
+PAPER_WIDTH_CM = 21.59      # 8.5"
+PAPER_HEIGHT_CM = 27.94     # 11"
+EDGE_MARGIN_CM = 1.0        # keep pen away from edges
+
+# Derived drawing bounds
+DRAW_MIN_X = EDGE_MARGIN_CM
+DRAW_MAX_X = PAPER_WIDTH_CM - EDGE_MARGIN_CM
+DRAW_MIN_Y = EDGE_MARGIN_CM
+DRAW_MAX_Y = PAPER_HEIGHT_CM - EDGE_MARGIN_CM
+
+# Hardware objects (to be initialized in setup code later)
+x_potentiometer = ADC(X_POT_PIN)
+y_potentiometer = ADC(Y_POT_PIN)
+
+shoulder_servo = PWM(Pin(SHOULDER_SERVO_PIN))
+elbow_servo = PWM(Pin(ELBOW_SERVO_PIN))
+pen_servo = PWM(Pin(PEN_SERVO_PIN))
+
+pen_button = Pin(PEN_BUTTON_PIN, Pin.IN, Pin.PULL_UP)
+
+
+def setup_hardware():
+    """
+    Initialize PWM frequencies and any other one-time hardware config.
+
+    Inputs:
+        None
+    Returns:
+        None
+
+    Responsible:
+        Owen
+
+    Notes:
+        - Sets all servos to 50 Hz.
+        - Optionally puts the arm and pen in a safe starting pose.
+    """
+    shoulder_servo.freq(50)
+    elbow_servo.freq(50)
+    pen_servo.freq(50)
+    # TODO: set initial safe positions for arm and pen
+    pass
+
+
+# ----------------- ADC / Input Layer -----------------
+
+
+def read_x_pot():
+    """
+    Read the current raw ADC value for the X potentiometer.
+
+    Inputs:
+        None
+    Returns:
+        int: raw_x (0–65535) representing the X control input
+
+    Responsible:
+        Mohammad
+
+    Notes:
+        - Directly reads from ADC channel connected to the X potentiometer.
+        - No filtering or mapping is applied here.
+    """
+    # TODO: replace with actual ADC read
+    return 0
+
+
+def read_y_pot():
+    """
+    Read the current raw ADC value for the Y potentiometer.
+
+    Inputs:
+        None
+    Returns:
+        int: raw_y (0–65535) representing the Y control input
+
+    Responsible:
+        Mohammad
+
+    Notes:
+        - Directly reads from ADC channel connected to the Y potentiometer.
+        - No filtering or mapping is applied here.
+    """
+    # TODO: replace with actual ADC read
+    return 0
+
+
+def read_pots():
+    """
+    Read both potentiometers and return a pair of raw values.
+
+    Inputs:
+        None
+    Returns:
+        tuple[int, int]: (raw_x, raw_y), each in range 0–65535
+
+    Responsible:
+        Mohammad
+
+    Notes:
+        - Convenience wrapper that calls read_x_pot() and read_y_pot().
+        - Any future input filtering could also be applied here.
+    """
+    raw_x = read_x_pot()
+    raw_y = read_y_pot()
+    return raw_x, raw_y
+
+
+# ----------------- Mapping Layer -----------------
+
+
+def map_pots_to_xy(raw_x, raw_y):
+    """
+    Map raw potentiometer readings to drawing coordinates in centimeters.
+
+    Inputs:
+        raw_x (int): X potentiometer reading (0–65535)
+        raw_y (int): Y potentiometer reading (0–65535)
+    Returns:
+        tuple[float, float]: (x_cm, y_cm) target point on the page in cm
+
+    Responsible:
+        Darim
+
+    Notes:
+        - Scales 0–65535 into the safe drawing rectangle defined by
+          DRAW_MIN_X..DRAW_MAX_X and DRAW_MIN_Y..DRAW_MAX_Y.
+        - This is where we enforce margins so the pen avoids the edges.
+    """
+    # TODO: implement linear mapping from raw range to [DRAW_MIN, DRAW_MAX]
+    x_cm = 0.0
+    y_cm = 0.0
+    return x_cm, y_cm
+
+
+def compute_clamped_reach(x_cm, y_cm):
+    """
+    Compute and clamp the arm reach from origin to (x_cm, y_cm).
+
+    Inputs:
+        x_cm (float): target X position in cm
+        y_cm (float): target Y position in cm
+    Returns:
+        float: arm_reach (cm) clamped to valid range for a 2-link arm
+
+    Responsible:
+        Darim
+
+    Notes:
+        - Uses the Pythagorean distance sqrt(x^2 + y^2).
+        - Clamps the distance to be within [|L1-L2| + epsilon, L1+L2 - epsilon]
+          so that inverse kinematics always receives a valid distance.
+    """
+    # TODO: compute sqrt(x_cm**2 + y_cm**2) and clamp with arm lengths
+    arm_reach = 0.0
+    return arm_reach
+
+
+# ----------------- Inverse Kinematics Layer -----------------
+
+
+def solve_inverse_kinematics(x_cm, y_cm):
+    """
+    Compute shoulder and elbow joint angles (in degrees) to reach (x_cm, y_cm).
+
+    Inputs:
+        x_cm (float): target X position in cm
+        y_cm (float): target Y position in cm
+    Returns:
+        tuple[float, float] | None:
+            (shoulder_deg, elbow_deg) in mathematical joint space, or
+            None if the point is unreachable or math fails.
+
+    Responsible:
+        Darim
+
+    Notes:
+        - Uses standard 2-link planar arm inverse kinematics with atan2 and acos.
+        - Calls compute_clamped_reach() internally to avoid domain errors.
+        - Does NOT yet adjust for servo-specific offsets or directions.
+    """
+    # TODO: implement IK formulas using atan2(...) and acos(...)
+    # On error or unreachable point, return None instead of raising.
+    return None
+
+
+def adjust_servo_angles(shoulder_deg, elbow_deg):
+    """
+    Convert mathematical joint angles to servo-friendly angles in [0, 180].
+
+    Inputs:
+        shoulder_deg (float): shoulder angle from IK (deg)
+        elbow_deg (float): elbow angle from IK (deg)
+    Returns:
+        tuple[float, float]:
+            (servo_shoulder_deg, servo_elbow_deg) in [0, 180]
+
+    Responsible:
+        Owen
+
+    Notes:
+        - Applies offsets and inversions so the arm moves in the desired direction.
+        - Clamps final servo angles to the [0, 180] mechanical safe range.
+    """
+    # TODO: add offsets and clamp to [0, 180]
+    servo_shoulder = 90.0
+    servo_elbow = 90.0
+    return servo_shoulder, servo_elbow
+
+
+# ----------------- Servo Driver Layer -----------------
+
+
+def angle_to_duty(angle_degrees):
+    """
+    Convert a servo angle in degrees to a 16-bit duty cycle value.
+
+    Inputs:
+        angle_degrees (float): angle in [0, 180]
+    Returns:
+        int: duty_u16 value suitable for PWM.duty_u16()
+
+    Responsible:
+        Owen
+
+    Notes:
+        - Maps angle into a pulse width range (e.g., 0.5 ms to 2.5 ms).
+        - Then converts that to a fraction of the 20 ms PWM period and scales
+          to 16-bit resolution (0–65535).
+    """
+    # TODO: implement mapping math
+    return 0
+
+
+def set_arm_servos(shoulder_angle, elbow_angle):
+    """
+    Set the physical servos to the desired shoulder and elbow angles.
+
+    Inputs:
+        shoulder_angle (float): servo-friendly shoulder angle in degrees
+        elbow_angle (float): servo-friendly elbow angle in degrees
+    Returns:
+        None
+
+    Responsible:
+        Owen
+
+    Notes:
+        - Calls angle_to_duty() for each joint.
+        - Writes duty values to shoulder_servo and elbow_servo.
+    """
+    # TODO: convert angles to duty and send to PWM objects
+    pass
+
+
+# ----------------- Pen Control Layer -----------------
+
+
+def update_pen(pen_state, previous_button_value):
+    """
+    Read the pen toggle button and update the pen servo state.
+
+    Inputs:
+        pen_state (int): 0 = pen up, 1 = pen down
+        previous_button_value (int): last sampled button value (0 or 1)
+    Returns:
+        tuple[int, int]:
+            (new_pen_state, new_previous_button_value)
+
+    Responsible:
+        Mohammad
+
+    Notes:
+        - Detects a falling edge on the button (1 -> 0 transition).
+        - Toggles between two fixed servo angles for pen up/down.
+        - Includes a simple debounce delay.
+    """
+    # TODO: read pen_button.value(), compare to previous_button_value,
+    #       toggle pen_state when a press is detected,
+    #       and move pen_servo accordingly.
+    return pen_state, previous_button_value
+
+
+# ----------------- Main Application Loop -----------------
+
+
+def main_loop():
+    """
+    Main control loop for the brachiograph.
+
+    Inputs:
+        None
+    Returns:
+        None (loops forever)
+
+    Responsible:
+        Darim
+
+    Notes:
+        Loop behaviour:
+        1. Read raw potentiometer inputs (X, Y).
+        2. Map them to target X/Y coordinates on the paper.
+        3. Run inverse kinematics to get shoulder and elbow angles.
+        4. Adjust those angles to servo-friendly values.
+        5. Command the servos to move to the new angles.
+        6. Handle pen up/down toggling via the button.
+        7. Sleep briefly to control update rate.
+    """
+    pen_state = 0
+    previous_button_value = 1
+
+    setup_hardware()
+
+    while True:
+        raw_x, raw_y = read_pots()
+        x_cm, y_cm = map_pots_to_xy(raw_x, raw_y)
+
+        angles = solve_inverse_kinematics(x_cm, y_cm)
+        if angles is None:
+            # Unreachable point; skip this cycle
+            continue
+
+        shoulder_deg, elbow_deg = angles
+        servo_shoulder, servo_elbow = adjust_servo_angles(shoulder_deg, elbow_deg)
+        set_arm_servos(servo_shoulder, servo_elbow)
+
+        pen_state, previous_button_value = update_pen(
+            pen_state,
+            previous_button_value
+        )
+
+        # TODO: optional: print debug info for testing
+        sleep(0.05)
+
+
+# Optional entry point
+if __name__ == "__main__":
+    main_loop()
